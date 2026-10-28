@@ -79,6 +79,7 @@ class PlcPoller(QThread):
             blocks, fields = [], []
         period = max(self.cfg.plc.poll_ms, 20) / 1000
         client: SlmpClient | None = None
+        verified = False   # 目前連線是否已成功讀取過（iQ-F 拔線重插後可能接受連線又立即中斷）
 
         while self._running:
             with self._lock:
@@ -90,11 +91,11 @@ class PlcPoller(QThread):
 
             if client is None:
                 client = SlmpClient(host, port)
+                verified = False
                 try:
                     client.connect()
                     src = client.local_address()
                     self.connection_changed.emit(True, f"{host}:{port}（本機來源 {src[0]}:{src[1]}）")
-                    self._on_connected()
                 except OSError as e:
                     client = None
                     self.connection_changed.emit(False, f"{host}:{port} 連線失敗：{e}")
@@ -111,8 +112,14 @@ class PlcPoller(QThread):
                 client = None
                 self.connection_changed.emit(False, f"通訊錯誤：{e}")
                 self._on_lost(f"通訊錯誤：{e}")
-                continue   # 立即重試連線
+                if not verified:
+                    # 連上後一次都沒讀成功：PLC 尚未恢復，等待後再試，避免快速重連洗版
+                    self._wait_offline(RECONNECT_SEC, period)
+                continue   # 曾正常通訊的連線中斷 → 立即重試
 
+            # 讀取成功才算真正恢復連線（只連上 TCP 不算）
+            verified = True
+            self._on_connected()
             now = datetime.now()
             values = [decode(f, slice_field(f, data)) for f in fields]
             self._update_batch(on, now, values, [f.name for f in fields])

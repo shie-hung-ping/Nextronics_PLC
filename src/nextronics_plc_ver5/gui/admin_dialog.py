@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..camera import list_cameras
-from ..config import AppConfig, FieldDef
+from ..config import AppConfig, FieldDef, config_path
 from ..decoding import compute_read_blocks, field_range_text
 from ..plc.devices import parse_device
 from ..plc.slmp import probe_port
@@ -212,8 +212,9 @@ class AdminDialog(QDialog):
         self.video_dir = QLineEdit(s.video_dir)
         self.csv_dir = QLineEdit(s.csv_dir)
         self.error_dir = QLineEdit(s.error_log_dir)
+        self.config_dir_edit = QLineEdit(str(config_path().parent))
         for label, edit in (("錄影檔儲存位址：", self.video_dir), ("CSV 檔儲存位置：", self.csv_dir),
-                            ("ErrorLog 位置：", self.error_dir)):
+                            ("ErrorLog 位置：", self.error_dir), ("設定檔（config.json）位置：", self.config_dir_edit)):
             row = QHBoxLayout()
             btn = QPushButton("瀏覽…")
             btn.clicked.connect(lambda _=False, e=edit: self._browse(e))
@@ -395,6 +396,7 @@ class AdminDialog(QDialog):
         self.cfg.storage.video_dir = self.video_dir.text().strip()
         self.cfg.storage.csv_dir = self.csv_dir.text().strip()
         self.cfg.storage.error_log_dir = self.error_dir.text().strip()
+        self.config_dir = self.config_dir_edit.text().strip()   # 不屬於 AppConfig，由主畫面套用
         # 存檔前檢查，避免存入無法運作的設定
         try:
             parse_device(p.trigger)
@@ -404,7 +406,8 @@ class AdminDialog(QDialog):
             if any(not f.name.strip() for f in self.cfg.fields):
                 raise ValueError("欄位名稱不可空白")
             compute_read_blocks(self.cfg.fields)
-            if not self.cfg.storage.video_dir or not self.cfg.storage.csv_dir or not self.cfg.storage.error_log_dir:
+            if not (self.cfg.storage.video_dir and self.cfg.storage.csv_dir
+                    and self.cfg.storage.error_log_dir and self.config_dir):
                 raise ValueError("請指定儲存位置")
         except ValueError as e:
             QMessageBox.warning(self, "設定錯誤", str(e))

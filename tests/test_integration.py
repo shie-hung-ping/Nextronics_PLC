@@ -144,6 +144,33 @@ def test_disconnect_in_batch_keeps_batch_and_marks_data_lost(app, sim, tmp_path)
     assert "PLC 斷線" in log and batch.batch_id in log and "超過 1 秒" in log and "自動重新連線" in log
 
 
+def test_replug_drop_storm_then_m100_off_ends_batch(app, sim, tmp_path):
+    """實機情境：拔線重插後 PLC 接受連線又立即中斷一段時間，期間 M100 變 0；恢復後批次應結束。"""
+    cfg = _offline_cfg(sim, tmp_path)
+    cfg.plc.reconnect_alert_sec = 60
+    sim.plc.set_bit("M100", True)
+    lost, back, finished = [], [], []
+    poller = PlcPoller(cfg)
+    poller.connection_lost.connect(lambda t, in_batch: lost.append(in_batch))
+    poller.reconnected.connect(lambda t0, t1: back.append(t0))
+    poller.batch_finished.connect(lambda b, rows, reason: finished.append(reason))
+    poller.start()
+    try:
+        assert wait_until(app, lambda: poller.in_batch)
+        sim.drop_clients = True
+        assert wait_until(app, lambda: lost, 8)
+        sim.plc.set_bit("M100", False)
+        wait_until(app, lambda: False, 3)        # 讓輪詢經歷數次「連上即中斷」
+        assert poller.in_batch and not back, "只連上 TCP、尚未讀取成功不可視為已恢復"
+        sim.drop_clients = False
+        assert wait_until(app, lambda: finished, 8)
+    finally:
+        poller.stop()
+    assert lost == [True] and len(back) == 1, "一次斷線事件只應有一次斷線與一次重連"
+    assert finished == ["觸發訊號 OFF"]
+    assert len(_error_log_text(cfg).splitlines()) == 2
+
+
 def test_disconnect_outside_batch_flags_no_files(app, sim, tmp_path):
     cfg = _offline_cfg(sim, tmp_path)
     lost = []

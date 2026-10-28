@@ -1,4 +1,8 @@
-"""系統設定：PLC、相機、儲存路徑與顯示欄位，以 JSON 檔保存。"""
+"""系統設定：PLC、相機、儲存路徑與顯示欄位，以 JSON 檔保存。
+
+設定檔位置由使用者在後台指定；程式啟動時需先知道去哪裡讀，因此在固定位置
+（LOCATOR_PATH）只記錄「設定檔所在資料夾」。沒有指定過時使用預設 CONFIG_PATH。
+"""
 
 from __future__ import annotations
 
@@ -7,7 +11,24 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 APP_DIR = Path.home() / "NextronicsPLC"
-CONFIG_PATH = APP_DIR / "config.json"
+CONFIG_NAME = "config.json"
+CONFIG_PATH = APP_DIR / CONFIG_NAME
+LOCATOR_PATH = APP_DIR / "config_location.txt"
+
+
+def config_path(locator: Path = LOCATOR_PATH) -> Path:
+    """目前使用中的設定檔路徑。"""
+    try:
+        d = locator.read_text(encoding="utf-8").strip()
+    except OSError:
+        d = ""
+    return Path(d) / CONFIG_NAME if d else CONFIG_PATH
+
+
+def set_config_dir(directory: str | Path, locator: Path = LOCATOR_PATH) -> None:
+    """記錄使用者選擇的設定檔資料夾（之後的讀寫都使用該處的 config.json）。"""
+    locator.parent.mkdir(parents=True, exist_ok=True)
+    locator.write_text(str(Path(directory)), encoding="utf-8")
 
 
 @dataclass
@@ -90,12 +111,14 @@ class AppConfig:
         return asdict(self)
 
 
-def load_config(path: Path = CONFIG_PATH) -> AppConfig:
+def load_config(path: Path | None = None) -> AppConfig:
+    path = path or config_path()
     if path.exists():
         return AppConfig.from_dict(json.loads(path.read_text(encoding="utf-8")))
     return AppConfig()
 
 
-def save_config(cfg: AppConfig, path: Path = CONFIG_PATH) -> None:
+def save_config(cfg: AppConfig, path: Path | None = None) -> None:
+    path = path or config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(cfg.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")

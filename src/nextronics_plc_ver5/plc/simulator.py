@@ -74,7 +74,7 @@ class _Handler(socketserver.BaseRequestHandler):
         try:
             while True:
                 header = _recv_exact(sock, 9)
-                if header is None:
+                if header is None or self.server.drop_clients:  # type: ignore[attr-defined]
                     return
                 length = struct.unpack("<H", header[7:9])[0]
                 body = _recv_exact(sock, length)
@@ -102,6 +102,8 @@ class SimulatorServer(socketserver.ThreadingTCPServer):
     def __init__(self, host: str = "127.0.0.1", port: int = 5000, plc: SimulatedPlc | None = None):
         super().__init__((host, port), _Handler)
         self.plc = plc or SimulatedPlc()
+        # True：模擬 iQ-F 拔線重插後的狀態——接受 TCP 連線但收到要求即中斷（既有連線也會被切斷）
+        self.drop_clients = False
 
     def start_background(self) -> threading.Thread:
         t = threading.Thread(target=self.serve_forever, daemon=True)

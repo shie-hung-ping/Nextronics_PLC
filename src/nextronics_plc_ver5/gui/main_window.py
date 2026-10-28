@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 from ..acquisition import PlcPoller
 from ..camera import CameraWorker, frame_to_qimage
-from ..config import AppConfig, save_config
+from ..config import AppConfig, config_path, save_config, set_config_dir
 from ..decoding import field_range_text
 from ..incidents import IncidentLog
 from ..storage import BatchPaths, recent_csv_files, video_files
@@ -330,6 +330,7 @@ class MainWindow(QMainWindow):
         self._admin.port_selected.connect(self._switch_port)
         accepted = self._admin.exec()
         new_cfg = self._admin.cfg
+        config_dir = getattr(self._admin, "config_dir", None)
         self._admin = None
         if not accepted:
             return
@@ -337,6 +338,8 @@ class MainWindow(QMainWindow):
                 self, "批次進行中", "套用新設定會結束目前批次（CSV 與錄影會先儲存），確定套用？") \
                 != QMessageBox.StandardButton.Yes:
             return
+        if config_dir and Path(config_dir).resolve() != config_path().parent.resolve():
+            set_config_dir(config_dir)   # 之後讀寫都改用新位置；舊位置的檔案保留不刪
         self._apply_config(new_cfg)
 
     def _switch_port(self, host: str, port: int):

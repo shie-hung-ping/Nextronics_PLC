@@ -13,12 +13,12 @@ def main() -> None:
 
     from PySide6.QtWidgets import QApplication
 
-    from .config import CONFIG_PATH, load_config, save_config
+    from .config import config_path, load_config, save_config
     from .gui.main_window import MainWindow
 
     app = QApplication(sys.argv)
     cfg = load_config()
-    if not CONFIG_PATH.exists():
+    if not config_path().exists():
         save_config(cfg)
     win = MainWindow(cfg)
     win.show()

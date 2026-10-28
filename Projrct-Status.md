@@ -16,7 +16,7 @@
 
 ## 尚未確認的事項（AI 目前採用的假設）
 - 「埠號來源」解讀為本機端連線的來源 IP:埠，顯示於後台與主畫面。
-- 設定檔位於 `~/NextronicsPLC/config.json`，預設儲存位置 `~/NextronicsPLC/videos`、`~/NextronicsPLC/csv`。
+- 設定檔位置可在後台「儲存」頁指定，所選資料夾記錄在固定的 `~/NextronicsPLC/config_location.txt`（未指定時使用 `~/NextronicsPLC/config.json`）；更換位置時舊檔保留不刪。預設儲存位置 `~/NextronicsPLC/videos`、`~/NextronicsPLC/csv`。
 - 錄影無聲音；MP4 使用 mp4v 編碼（OpenCV 內建），未確認其他播放器相容性需求。
 
 ## 任務索引
@@ -24,7 +24,7 @@
 - `tasks/02-PLC斷線資料遺失標示.md`：開發中（待實機驗證）
 
 ## 目前狀態
-- 02 子任務：程式與模擬 PLC 測試完成，待實機 iQ-F 斷線驗證。
+- 02 子任務：已修正實機拔線重插後的重連洗版問題；待實機複測「接回後 M100=0 能停止批次」（測試當下 PLC 的 M100 一直為 1）。
 
 ## 文件維護規則
 - 只保留目前有效的資訊，避免累積過期內容。
