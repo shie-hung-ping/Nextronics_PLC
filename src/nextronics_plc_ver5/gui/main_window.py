@@ -20,8 +20,10 @@ from ..acquisition import PlcPoller
 from ..camera import CameraWorker, frame_to_qimage
 from ..config import AppConfig, save_config
 from ..decoding import field_range_text
+from ..incidents import IncidentLog
 from ..storage import BatchPaths, recent_csv_files, video_files
 from .admin_dialog import AdminDialog
+from .alerts import IssueItemWidget, ReconnectToast, ack_dialog
 from .video_player import VideoPlayerDialog
 
 PAGE_SIZE = 5
@@ -41,6 +43,8 @@ class MainWindow(QMainWindow):
         self._admin: AdminDialog | None = None
         self._video_page = 0
         self._thumb_cache: dict[Path, tuple[float, QIcon]] = {}
+        self.incidents = IncidentLog(cfg.storage.error_log_dir)
+        self._alerts: dict[str, QMessageBox] = {}   # 尚未按「已知悉」的警告視窗，同類只開一個
 
         self._build_ui()
         self._start_camera()
@@ -118,6 +122,9 @@ class MainWindow(QMainWindow):
         lay.addLayout(top, 3)
         lay.addLayout(bottom, 2)
         self.setCentralWidget(root)
+        self.toast = ReconnectToast(self)
+        self.toast.acknowledged.connect(
+            lambda msgs: [self.incidents.log(f"使用者已知悉提醒：{m}") for m in msgs])
         self._reset_table()
         self._set_plc_status(False, "未連線")
 
@@ -130,12 +137,16 @@ class MainWindow(QMainWindow):
 
     # ---------------- 擷取執行緒 ----------------
     def _start_poller(self):
-        self.poller = PlcPoller(self.cfg, self)
+        self.poller = PlcPoller(self.cfg, self, incidents=self.incidents)
         self.poller.connection_changed.connect(self._set_plc_status)
         self.poller.values_updated.connect(self._on_values)
         self.poller.batch_started.connect(self._on_batch_started)
         self.poller.batch_finished.connect(self._on_batch_finished)
+        self.poller.connection_lost.connect(self._on_connection_lost)
+        self.poller.reconnected.connect(self._on_reconnected)
+        self.poller.outage_timeout.connect(self._on_outage_timeout)
         self.poller.error.connect(lambda m: self.statusBar().showMessage(m, 10000))
+        self.camera.set_signal_lost(False)   # 新的輪詢執行緒從未斷線狀態開始
         self.poller.start()
 
     def _start_camera(self):
@@ -173,6 +184,48 @@ class MainWindow(QMainWindow):
         self.camera.stop_recording()
         self._refresh_csv()
 
+    # ---------------- 斷線提示 ----------------
+    def _on_connection_lost(self, lost_at: datetime, in_batch: bool):
+        self.camera.set_signal_lost(True)
+        if in_batch:
+            self._refresh_csv()   # 記錄中的 CSV 立即標紅；錄影檔儲存後才出現在清單
+        else:
+            self._alert("lost", "PLC 已失去連線",
+                        f"PLC已失去連線資料儲存不完全\n斷線時間：{lost_at:%Y-%m-%d %H:%M:%S}")
+
+    def _on_reconnected(self, lost_at: datetime, now: datetime):
+        self.camera.set_signal_lost(False)
+        self.toast.add(f"{lost_at:%Y-%m-%d %H:%M:%S} 發生斷線，但已自動重新連線")
+
+    def _on_outage_timeout(self, lost_at: datetime, sec: int):
+        dur = f"{sec // 60}分鐘" if sec % 60 == 0 else f"{sec}秒"
+        self._alert("timeout", "PLC 重新連線逾時",
+                    f"PLC重新連線超過{dur}，資料儲存不完全\n斷線時間：{lost_at:%Y-%m-%d %H:%M:%S}")
+
+    def _alert(self, key: str, title: str, text: str):
+        """同類警告未確認前只保留一個視窗，新的事件更新其內容。"""
+        box = self._alerts.get(key)
+        if box is not None:
+            box.setText(text)
+            box.raise_()
+            return
+        box = ack_dialog(self, title, text)
+        self._alerts[key] = box
+        box.finished.connect(lambda *_: self._on_alert_ack(key, text))
+
+    def _on_alert_ack(self, key: str, text: str):
+        box = self._alerts.pop(key, None)
+        self.incidents.log(f"使用者已知悉警告：{(box.text() if box else text).splitlines()[0]}")
+
+    def _acknowledge_file(self, path: Path):
+        self.incidents.acknowledge(path)
+        self._refresh_videos()
+        self._refresh_csv()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.toast.reposition()
+
     def _on_frame(self, img: QImage):
         pix = QPixmap.fromImage(img).scaled(self.cam_view.size(), Qt.AspectRatioMode.KeepAspectRatio,
                                             Qt.TransformationMode.FastTransformation)
@@ -205,7 +258,20 @@ class MainWindow(QMainWindow):
         self._video_page = min(max(0, self._video_page), pages - 1)
         self.video_list.clear()
         for p in files[self._video_page * PAGE_SIZE:(self._video_page + 1) * PAGE_SIZE]:
-            item = QListWidgetItem(self._thumbnail(p), p.name)
+            issue = self.incidents.status(p)
+            if issue and not issue["acknowledged"]:
+                # 資料不完整且未確認：紅框 + 「我已知悉問題」
+                item = QListWidgetItem()
+                w = IssueItemWidget(f"{p.name}\n⚠ 資料不完整", self._thumbnail(p).pixmap(THUMB), red_frame=True)
+                w.setToolTip(f"{issue['reason']}（{issue['time']}）")
+                w.acknowledged.connect(lambda p=p: self._acknowledge_file(p))
+                item.setSizeHint(w.sizeHint())
+                item.setData(Qt.ItemDataRole.UserRole, str(p))
+                self.video_list.addItem(item)
+                self.video_list.setItemWidget(item, w)
+                continue
+            tag = "\n資料不完整（已知悉）" if issue else ""
+            item = QListWidgetItem(self._thumbnail(p), p.name + tag)
             item.setData(Qt.ItemDataRole.UserRole, str(p))
             self.video_list.addItem(item)
         self.page_label.setText(f"{self._video_page + 1} / {pages}（共 {len(files)} 筆）")
@@ -234,13 +300,29 @@ class MainWindow(QMainWindow):
 
     def _refresh_csv(self):
         self.csv_list.clear()
-        current = self.batch.csv_path if self.batch else None
-        for p in recent_csv_files(self.cfg.storage.csv_dir):
-            t = datetime.fromtimestamp(p.stat().st_mtime).strftime("%H:%M:%S")
+        current = self.batch.csv_path.resolve() if self.batch else None
+        files = [p.resolve() for p in recent_csv_files(self.cfg.storage.csv_dir)]
+        # 未確認的問題 CSV 超過一小時也保留在清單，直到使用者按「我已知悉問題」
+        csv_dir = Path(self.cfg.storage.csv_dir).resolve()
+        files += [p for p in self.incidents.pending()
+                  if p.suffix == ".csv" and p.parent == csv_dir and p.exists() and p not in files]
+        for p in files:
+            t = datetime.fromtimestamp(p.stat().st_mtime).strftime("%m-%d %H:%M:%S")
             tag = "（記錄中）" if p == current else ""
             item = QListWidgetItem(f"{p.name}　更新 {t}{tag}")
             item.setData(Qt.ItemDataRole.UserRole, str(p))
             self.csv_list.addItem(item)
+            issue = self.incidents.status(p)
+            if issue and not issue["acknowledged"]:
+                # 資料不完整且未確認：紅字 + 「我已知悉問題」
+                w = IssueItemWidget(f"{item.text()}\n⚠ 資料不完整")
+                w.setToolTip(f"{issue['reason']}（{issue['time']}）")
+                w.acknowledged.connect(lambda p=p: self._acknowledge_file(p))
+                item.setText("")
+                item.setSizeHint(w.sizeHint())
+                self.csv_list.setItemWidget(item, w)
+            elif issue:
+                item.setText(item.text() + "　資料不完整（已知悉）")
 
     # ---------------- 後台管理 ----------------
     def _open_admin(self):
@@ -268,6 +350,7 @@ class MainWindow(QMainWindow):
         self.poller.stop()       # 會結束批次並發出 batch_finished
         self.cfg = new_cfg
         save_config(self.cfg)
+        self.incidents = IncidentLog(self.cfg.storage.error_log_dir)
         if camera_changed:
             self.camera.stop()
             self._start_camera()

@@ -13,10 +13,11 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QThread, Signal
-from PySide6.QtGui import QImage
+from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtGui import QColor, QImage, QPainter
 
 _FOURCC = {"mp4": "mp4v", "avi": "MJPG"}
+LOST_TEXT = "畫面遺失"
 
 
 class VideoRecorder:
@@ -51,6 +52,23 @@ class VideoRecorder:
         return True
 
 
+def lost_frame(shape: tuple[int, ...]) -> np.ndarray:
+    """與相機畫面同尺寸的黑畫面，中央寫「畫面遺失」（OpenCV 無法繪製中文，改用 QPainter）。"""
+    h, w = shape[:2]
+    img = QImage(w, h, QImage.Format.Format_RGB888)
+    img.fill(QColor("black"))
+    p = QPainter(img)
+    font = p.font()
+    font.setPixelSize(max(12, h // 8))
+    font.setBold(True)
+    p.setFont(font)
+    p.setPen(QColor("white"))
+    p.drawText(img.rect(), Qt.AlignmentFlag.AlignCenter, LOST_TEXT)
+    p.end()
+    arr = np.frombuffer(img.constBits(), np.uint8).reshape(h, img.bytesPerLine())[:, : w * 3]
+    return cv2.cvtColor(arr.reshape(h, w, 3), cv2.COLOR_RGB2BGR)
+
+
 def frame_to_qimage(frame: np.ndarray) -> QImage:
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     h, w = rgb.shape[:2]
@@ -70,6 +88,12 @@ class CameraWorker(QThread):
         self._pending_start: Path | None = None
         self._pending_stop = False
         self._running = True
+        self._signal_lost = False
+        self._lost_frame: np.ndarray | None = None
+
+    def set_signal_lost(self, lost: bool) -> None:
+        """PLC 斷線期間，錄影改寫入「畫面遺失」黑畫面（即時預覽仍顯示相機畫面）。"""
+        self._signal_lost = lost
 
     # 以下兩個方法可由其他執行緒呼叫，實際動作在擷取迴圈中執行
     def start_recording(self, path: Path) -> None:
@@ -105,8 +129,13 @@ class CameraWorker(QThread):
                 cap = None
                 continue
             if recorder is not None:
+                out = frame
+                if self._signal_lost:
+                    if self._lost_frame is None or self._lost_frame.shape != frame.shape:
+                        self._lost_frame = lost_frame(frame.shape)
+                    out = self._lost_frame
                 try:
-                    recorder.write(frame, now)
+                    recorder.write(out, now)
                 except RuntimeError as e:
                     self.recording_failed.emit(str(e))
                     recorder = None

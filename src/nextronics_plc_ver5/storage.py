@@ -42,6 +42,7 @@ class CsvBatchWriter:
         self.path = path
         self._f = open(path, "w", newline="", encoding="utf-8-sig")  # BOM 讓 Excel 正確顯示中文
         self._w = csv.writer(self._f)
+        self._ncols = max(1, len(columns))
         self._w.writerow(["時間"] + columns)
         self._f.flush()
         self.rows = 0
@@ -50,6 +51,10 @@ class CsvBatchWriter:
         self._w.writerow([ts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]] + values)
         self._f.flush()
         self.rows += 1
+
+    def write_error(self, ts: datetime, message: str) -> None:
+        """資料遺失列：時間 + 錯誤訊息（放在第一個資料欄），其餘欄位留空。"""
+        self.write(ts, [message] + [""] * (self._ncols - 1))
 
     def close(self) -> None:
         if not self._f.closed:

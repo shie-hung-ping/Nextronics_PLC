@@ -43,6 +43,7 @@ class PlcConfig:
     port: int = 5000
     poll_ms: int = 200
     trigger: str = "M100"
+    reconnect_alert_sec: int = 60        # 斷線後超過此秒數仍連不上 → GUI 警告資料儲存不完全
 
 
 @dataclass
@@ -56,6 +57,7 @@ class CameraConfig:
 class StorageConfig:
     video_dir: str = str(APP_DIR / "videos")
     csv_dir: str = str(APP_DIR / "csv")
+    error_log_dir: str = str(APP_DIR / "ErrorLog")
 
 
 def default_fields() -> list[FieldDef]:

@@ -82,6 +82,9 @@ class AdminDialog(QDialog):
         form.addRow("連線方式：", conn)
         self.trigger = QLineEdit(p.trigger)
         form.addRow("開始／停止訊號：", self.trigger)
+        self.alert_sec = QSpinBox(minimum=5, maximum=86400, singleStep=10, suffix=" 秒",
+                                  value=p.reconnect_alert_sec)
+        form.addRow("斷線逾時警告：", self.alert_sec)
 
         box = QGroupBox("TCP 埠號（點選即切換使用中的埠）")
         bl = QVBoxLayout(box)
@@ -208,7 +211,9 @@ class AdminDialog(QDialog):
         form = QFormLayout(w)
         self.video_dir = QLineEdit(s.video_dir)
         self.csv_dir = QLineEdit(s.csv_dir)
-        for label, edit in (("錄影檔儲存位址：", self.video_dir), ("CSV 檔儲存位置：", self.csv_dir)):
+        self.error_dir = QLineEdit(s.error_log_dir)
+        for label, edit in (("錄影檔儲存位址：", self.video_dir), ("CSV 檔儲存位置：", self.csv_dir),
+                            ("ErrorLog 位置：", self.error_dir)):
             row = QHBoxLayout()
             btn = QPushButton("瀏覽…")
             btn.clicked.connect(lambda _=False, e=edit: self._browse(e))
@@ -381,6 +386,7 @@ class AdminDialog(QDialog):
         p.host = self.host.text().strip()
         p.poll_ms = self.poll.value()
         p.trigger = self.trigger.text().strip().upper()
+        p.reconnect_alert_sec = self.alert_sec.value()
         ports = self._parse_ports()
         c = self.cfg.camera
         c.index = self.cam.currentData()
@@ -388,6 +394,7 @@ class AdminDialog(QDialog):
         c.fps = self.fps.value()
         self.cfg.storage.video_dir = self.video_dir.text().strip()
         self.cfg.storage.csv_dir = self.csv_dir.text().strip()
+        self.cfg.storage.error_log_dir = self.error_dir.text().strip()
         # 存檔前檢查，避免存入無法運作的設定
         try:
             parse_device(p.trigger)
@@ -397,7 +404,7 @@ class AdminDialog(QDialog):
             if any(not f.name.strip() for f in self.cfg.fields):
                 raise ValueError("欄位名稱不可空白")
             compute_read_blocks(self.cfg.fields)
-            if not self.cfg.storage.video_dir or not self.cfg.storage.csv_dir:
+            if not self.cfg.storage.video_dir or not self.cfg.storage.csv_dir or not self.cfg.storage.error_log_dir:
                 raise ValueError("請指定儲存位置")
         except ValueError as e:
             QMessageBox.warning(self, "設定錯誤", str(e))
