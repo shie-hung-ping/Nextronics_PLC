@@ -8,3 +8,9 @@ wheels/
 
 # Virtual environments
 .venv
+
+# 本機測試產生的錄影、CSV、ErrorLog
+NextronicsPLC/
+
+# PyInstaller 建置輸出
+*.spec.bak
